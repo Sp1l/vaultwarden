@@ -1364,6 +1364,7 @@ where
     reg!("email/pw_hint_some", ".html");
     reg!("email/send_2fa_removed_from_org", ".html");
     reg!("email/send_emergency_access_invite", ".html");
+    reg!("email/send_org_enrolled", ".html");
     reg!("email/send_org_invite", ".html");
     reg!("email/send_single_org_removed_from_org", ".html");
     reg!("email/set_password", ".html");
