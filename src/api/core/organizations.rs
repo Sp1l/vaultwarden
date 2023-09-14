@@ -171,7 +171,7 @@ async fn create_organization(headers: Headers, data: JsonUpcase<OrgData>, mut co
     };
 
     let org = Organization::new(data.Name, data.BillingEmail, private_key, public_key);
-    let mut user_org = UserOrganization::new(headers.user.uuid, org.uuid.clone());
+    let mut user_org = UserOrganization::new(headers.user.uuid, org.uuid.clone(), None);
     let collection = Collection::new(org.uuid.clone(), data.CollectionName, None);
 
     user_org.akey = data.Key;
@@ -933,7 +933,8 @@ async fn send_invite(
             }
         };
 
-        let mut new_user = UserOrganization::new(user.uuid.clone(), String::from(org_id));
+        let mut new_user =
+            UserOrganization::new(user.uuid.clone(), String::from(org_id), Some(headers.user.email.clone()));
         let access_all = data.AccessAll.unwrap_or(false);
         new_user.access_all = access_all;
         new_user.atype = new_type;
@@ -1933,7 +1934,8 @@ async fn import(org_id: &str, data: JsonUpcase<OrgImportData>, headers: Headers,
                     UserOrgStatus::Accepted as i32 // Automatically mark user as accepted if no email invites
                 };
 
-                let mut new_org_user = UserOrganization::new(user.uuid.clone(), String::from(org_id));
+                let mut new_org_user =
+                    UserOrganization::new(user.uuid.clone(), String::from(org_id), Some(headers.user.email.clone()));
                 new_org_user.access_all = false;
                 new_org_user.atype = UserOrgType::User as i32;
                 new_org_user.status = user_org_status;
