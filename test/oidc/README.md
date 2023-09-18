@@ -11,7 +11,7 @@ First create a copy of `.env.template` as `.env` (This is done to prevent commit
 Then start the stack (the `profile` is required to run the `VaultWarden`) :
 
 ```bash
-> docker-compose --profile VaultWarden up
+> DOCKER_BUILDKIT=1 docker-compose --profile VaultWarden up
 ....
 keycloakSetup_1  | Logging into http://127.0.0.1:8080 as user admin of realm master
 keycloakSetup_1  | Created new realm with id 'test'
@@ -50,7 +50,7 @@ Otherwise you'll need to reveal the SSO login button using the debug console (F1
 
 ## To force rebuilding the VaultWarden image
 
-Use `docker-compose --profile VaultWarden up --build VaultWarden`.
+Use `DOCKER_BUILDKIT=1 docker-compose --profile VaultWarden up --build VaultWarden`.
 
 If after building the `Keycloak` configuration is not run, just interrupt and run without `--build`
 
