@@ -176,9 +176,9 @@ async fn _authorization_login(
         Some(code) => code,
     };
 
-    let email = sso::exchange_code(code).await?;
+    let user_infos = sso::exchange_code(code).await?;
 
-    let user_data = match User::find_by_mail(email.as_str(), conn).await {
+    let user_data = match User::find_by_mail(user_infos.email.as_str(), conn).await {
         None => None,
         Some(user) => {
             let (mut device, new_device) = get_device(&data, conn, &user).await;
@@ -194,7 +194,7 @@ async fn _authorization_login(
     let (user, mut device, new_device, twofactor_token) = match user_data {
         Some(data) => data,
         None => {
-            let mut user = User::new(email.clone());
+            let mut user = User::new(user_infos.email, user_infos.user_name);
             user.verified_at = Some(now);
             user.save(conn).await?;
 

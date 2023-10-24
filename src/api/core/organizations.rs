@@ -916,7 +916,7 @@ async fn send_invite(
                     invitation.save(&mut conn).await?;
                 }
 
-                let mut user = User::new(email.clone());
+                let mut user = User::new(email.clone(), None);
                 user.save(&mut conn).await?;
                 user
             }

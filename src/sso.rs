@@ -89,6 +89,7 @@ struct AuthenticatedUser {
     pub nonce: String,
     pub refresh_token: String,
     pub email: String,
+    pub user_name: Option<String>,
 }
 
 // DecodingKey and Validation used to read the SSO JWT token response
@@ -131,14 +132,23 @@ fn prepare_decoding() -> (DecodingKey, Validation) {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct UserInformation {
+    pub email: String,
+    pub user_name: Option<String>,
+}
+
 // During the 2FA flow we will
 //  - retrieve the user information and then only discover he needs 2FA.
 //  - second time we will rely on the `AC_CACHE` since the `code` has already been exchanged.
 // The `nonce` will ensure that the user is authorized only once.
-// We return only the `email` to force calling `redeem` to obtain the `refresh_token`.
-pub async fn exchange_code(code: &String) -> ApiResult<String> {
+// We return only the `UserInformation` to force calling `redeem` to obtain the `refresh_token`.
+pub async fn exchange_code(code: &String) -> ApiResult<UserInformation> {
     if let Some(authenticated_user) = AC_CACHE.get(code) {
-        return Ok(authenticated_user.email);
+        return Ok(UserInformation {
+            email: authenticated_user.email,
+            user_name: authenticated_user.user_name,
+        });
     }
 
     let oidc_code = AuthorizationCode::new(code.clone());
@@ -178,15 +188,21 @@ pub async fn exchange_code(code: &String) -> ApiResult<String> {
                 },
             };
 
+            let user_name = user_info.preferred_username().map(|un| un.to_string());
+
             let authenticated_user = AuthenticatedUser {
                 nonce: token.nonce,
                 refresh_token,
                 email: email.clone(),
+                user_name: user_name.clone(),
             };
 
             AC_CACHE.insert(code.clone(), authenticated_user.clone());
 
-            Ok(email)
+            Ok(UserInformation {
+                email,
+                user_name,
+            })
         }
         Err(err) => err!(format!("Failed to contact token endpoint: {err}")),
     }

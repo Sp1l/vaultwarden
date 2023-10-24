@@ -180,7 +180,7 @@ pub async fn _register(data: JsonUpcase<RegisterData>, mut conn: DbConn) -> Json
             // because the vaultwarden admin can invite anyone, regardless
             // of other signup restrictions.
             if Invitation::take(&email, &mut conn).await || CONFIG.is_signup_allowed(&email) {
-                User::new(email.clone())
+                User::new(email.clone(), None)
             } else {
                 err!("Registration not allowed or user already exists")
             }
