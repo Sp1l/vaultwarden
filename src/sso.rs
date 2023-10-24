@@ -116,12 +116,14 @@ fn prepare_decoding() -> (DecodingKey, Validation) {
             validation.leeway = 30; // 30 seconds
             validation.validate_exp = true;
             validation.validate_nbf = true;
+            validation.set_audience(&[CONFIG.sso_client_id()]);
             validation.set_issuer(&[CONFIG.sso_authority()]);
 
             (key, validation)
         }
         None => {
             let mut validation = jsonwebtoken::Validation::default();
+            validation.set_audience(&[CONFIG.sso_client_id()]);
             validation.insecure_disable_signature_validation();
 
             (DecodingKey::from_secret(&[]), validation)
