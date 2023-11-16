@@ -393,7 +393,7 @@ async fn authenticated_response(
         "KdfIterations": user.client_kdf_iter,
         "KdfMemory": user.client_kdf_memory,
         "KdfParallelism": user.client_kdf_parallelism,
-        "ResetMasterPassword": user.password_hash.is_empty(),
+        "ResetMasterPassword": false,// TODO: Same as above
         "scope": scope,
         "unofficialServer": true,
         "UserDecryptionOptions": {
@@ -797,17 +797,16 @@ fn _check_is_some<T>(value: &Option<T>, msg: &str) -> EmptyResult {
 }
 
 #[get("/account/prevalidate")]
-#[allow(non_snake_case)]
 fn prevalidate() -> JsonResult {
     let claims = generate_ssotoken_claims();
-    let ssotoken = encode_jwt(&claims);
+    let sso_token = encode_jwt(&claims);
     Ok(Json(json!({
-        "token": ssotoken,
+        "token": sso_token,
     })))
 }
 
 #[get("/connect/oidc-signin?<code>")]
-fn oidcsignin(code: String, jar: &CookieJar<'_>, _conn: DbConn) -> ApiResult<CustomRedirect> {
+fn oidcsignin(code: String, jar: &CookieJar<'_>) -> ApiResult<CustomRedirect> {
     let cookiemanager = CookieManager::new(jar);
     let redirect_uri = cookiemanager
         .get_cookie("redirect_uri".to_string())
@@ -830,7 +829,6 @@ fn oidcsignin(code: String, jar: &CookieJar<'_>, _conn: DbConn) -> ApiResult<Cus
 }
 
 #[derive(FromForm)]
-#[allow(non_snake_case)]
 struct AuthorizeData {
     #[allow(unused)]
     #[field(name = uncased("client_id"))]
@@ -862,7 +860,7 @@ struct AuthorizeData {
     domain_hint: Option<String>,
     #[allow(unused)]
     #[field(name = uncased("ssoToken"))]
-    ssoToken: Option<String>,
+    sso_token: Option<String>,
 }
 
 #[get("/connect/authorize?<data..>")]

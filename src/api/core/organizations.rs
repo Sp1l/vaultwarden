@@ -305,9 +305,9 @@ async fn get_user_collections(headers: Headers, mut conn: DbConn) -> Json<Value>
     }))
 }
 
-// Called during the SSO enrollement
+// Called during the SSO enrollment
 #[get("/organizations/<_identifier>/auto-enroll-status")]
-fn get_auto_enroll_status(_identifier: String) -> JsonResult {
+fn get_auto_enroll_status(_identifier: &str) -> JsonResult {
     Ok(Json(json!({
         "ResetPasswordEnabled": false, // Not implemented
     })))
@@ -1677,18 +1677,18 @@ async fn list_policies_token(org_id: &str, token: &str, mut conn: DbConn) -> Jso
     })))
 }
 
-// Called during the SSO enrollement.
-// Since the VW SSO flow is not linked to an organization it will be called with a dummy or undefinned `org_id`
+// Called during the SSO enrollment.
+// Since the VW SSO flow is not linked to an organization it will be called with a dummy or undefined `org_id`
 #[allow(non_snake_case)]
 #[get("/organizations/<org_id>/policies/invited-user?<userId>")]
-async fn list_policies_invited_user(org_id: String, userId: String, mut conn: DbConn) -> JsonResult {
+async fn list_policies_invited_user(org_id: &str, userId: &str, mut conn: DbConn) -> JsonResult {
     if userId.is_empty() {
         err!("userId must not be empty");
     }
 
-    let user_orgs = UserOrganization::find_invited_by_user(&userId, &mut conn).await;
+    let user_orgs = UserOrganization::find_invited_by_user(userId, &mut conn).await;
     let policies_json: Vec<Value> = if user_orgs.into_iter().any(|user_org| user_org.org_uuid == org_id) {
-        let policies = OrgPolicy::find_by_org(&org_id, &mut conn).await;
+        let policies = OrgPolicy::find_by_org(org_id, &mut conn).await;
         policies.iter().map(OrgPolicy::to_json).collect()
     } else {
         vec![]

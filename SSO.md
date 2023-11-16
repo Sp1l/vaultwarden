@@ -17,7 +17,7 @@ The following configurations are available
  - `SSO_AUTHORITY` : the OpendID Connect Discovery endpoint of your SSO
  - `SSO_CLIENT_ID` : Client Id
  - `SSO_CLIENT_SECRET` : Client Secret
- - `SSO_KEY_FILEPATH` : And optional public key that can be used to authenticate the SSO during the exchange flow.
+ - `SSO_KEY_FILEPATH` : Optional public key to validate the JWT token (without it signature check will not be done).
 
 The callback url is : `https://your.domain/identity/connect/oidc-signin`
 
