@@ -58,6 +58,7 @@ pub fn routes() -> Vec<Route> {
         list_policies,
         list_policies_token,
         list_policies_invited_user,
+        get_policy_master_password,
         get_policy,
         put_policy,
         get_organization_tax,
@@ -1701,7 +1702,15 @@ async fn list_policies_invited_user(org_id: &str, userId: &str, mut conn: DbConn
     })))
 }
 
-#[get("/organizations/<org_id>/policies/<pol_type>")]
+// Called during the SSO enrollement.
+// Always return that there is no Master password requirements.
+#[get("/organizations/<org_id>/policies/master-password", rank = 1)]
+fn get_policy_master_password(org_id: &str, _headers: Headers) -> JsonResult {
+    let policy = OrgPolicy::new(String::from(org_id), OrgPolicyType::MasterPassword, "null".to_string());
+    Ok(Json(policy.to_json()))
+}
+
+#[get("/organizations/<org_id>/policies/<pol_type>", rank = 2)]
 async fn get_policy(org_id: &str, pol_type: i32, _headers: AdminHeaders, mut conn: DbConn) -> JsonResult {
     let pol_type_enum = match OrgPolicyType::from_i32(pol_type) {
         Some(pt) => pt,
