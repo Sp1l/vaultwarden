@@ -614,21 +614,23 @@ make_config! {
     /// OpenID Connect SSO settings
     sso {
         /// Enabled
-        sso_enabled:            bool,   true,   def,    false;
+        sso_enabled:                    bool,   true,   def,    false;
         /// Force SSO login
-        sso_only:               bool,   true,   def,    false;
+        sso_only:                       bool,   true,   def,    false;
         /// Client ID
-        sso_client_id:          String, true,   def,    String::new();
+        sso_client_id:                  String, true,   def,    String::new();
         /// Client Key
-        sso_client_secret:      Pass,   true,   def,    String::new();
+        sso_client_secret:              Pass,   true,   def,    String::new();
         /// Authority Server
-        sso_authority:          String, true,   def,    String::new();
+        sso_authority:                  String, true,   def,    String::new();
         /// CallBack Path
-        sso_callback_path:      String, false,  gen,    |c| generate_sso_callback_path(&c.domain);
+        sso_callback_path:              String, false,  gen,    |c| generate_sso_callback_path(&c.domain);
         /// Allow workaround so SSO logins accept all invites
-        sso_acceptall_invites:  bool,   true,   def,     false;
+        sso_acceptall_invites:          bool,   true,   def,     false;
         /// Optional sso public key
-        sso_key_filepath:       String, false,  auto,   |c| format!("{}/{}", c.data_folder, "sso_key.pub.pem");
+        sso_key_filepath:               String, false,  auto,   |c| format!("{}/{}", c.data_folder, "sso_key.pub.pem");
+        /// Optional sso master password policy
+        sso_master_password_policy:     String, false,  option;
     },
 
     /// Yubikey settings
@@ -654,7 +656,7 @@ make_config! {
         /// Host
         duo_host:               String, true,   option;
         /// Application Key (generated automatically)
-        _duo_akey:              Pass,   false,  option;
+        _duo_akey:              Pass,   true,  option;
     },
 
     /// SMTP Email Settings
@@ -843,6 +845,7 @@ fn validate_config(cfg: &ConfigItems) -> Result<(), Error> {
 
         internal_sso_issuer_url(&cfg.sso_authority)?;
         internal_sso_redirect_url(&cfg.sso_callback_path)?;
+        check_master_password_policy(&cfg.sso_master_password_policy)?;
     }
 
     if cfg._enable_yubico {
@@ -1022,6 +1025,17 @@ fn internal_sso_redirect_url(sso_callback_path: &String) -> Result<openidconnect
         Err(err) => err!(format!("Invalid sso_callback_path ({sso_callback_path} built using `domain`) URL: {err}")),
         Ok(redirect_url) => Ok(redirect_url),
     }
+}
+
+fn check_master_password_policy(sso_master_password_policy: &Option<String>) -> Result<(), Error> {
+    let policy = sso_master_password_policy.as_ref().map(|mpp| crate::db::models::OrgPolicy::data_json(mpp));
+    if policy == Some(serde_json::Value::Null) {
+        err!(format!(
+            "Invalid sso_master_password_policy ({:?}), Ensure that it's correctly escaped with ''",
+            sso_master_password_policy
+        ))
+    }
+    Ok(())
 }
 
 /// Extracts an RFC 6454 web origin from a URL.

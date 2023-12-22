@@ -18,6 +18,7 @@ The following configurations are available
  - `SSO_CLIENT_ID` : Client Id
  - `SSO_CLIENT_SECRET` : Client Secret
  - `SSO_KEY_FILEPATH` : Optional public key to validate the JWT token (without it signature check will not be done).
+ - `SSO_MASTER_PASSWORD_POLICY`: Optional Master password policy
 
 The callback url is : `https://your.domain/identity/connect/oidc-signin`
 

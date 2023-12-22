@@ -1702,11 +1702,22 @@ async fn list_policies_invited_user(org_id: &str, userId: &str, mut conn: DbConn
     })))
 }
 
-// Called during the SSO enrollement.
-// Always return that there is no Master password requirements.
+// Called during the SSO enrollment.
 #[get("/organizations/<org_id>/policies/master-password", rank = 1)]
 fn get_policy_master_password(org_id: &str, _headers: Headers) -> JsonResult {
-    let policy = OrgPolicy::new(String::from(org_id), OrgPolicyType::MasterPassword, "null".to_string());
+    let data = match CONFIG.sso_master_password_policy() {
+        Some(policy) => policy,
+        None => "null".to_string(),
+    };
+
+    let policy = OrgPolicy {
+        uuid: String::from(org_id),
+        org_uuid: String::from(org_id),
+        atype: OrgPolicyType::MasterPassword as i32,
+        enabled: CONFIG.sso_master_password_policy().is_some(),
+        data,
+    };
+
     Ok(Json(policy.to_json()))
 }
 
