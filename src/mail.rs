@@ -236,7 +236,7 @@ pub async fn send_invite(
     org_name: &str,
     invited_by_email: Option<String>,
 ) -> EmptyResult {
-    if CONFIG.sso_acceptall_invites() {
+    if CONFIG.sso_enabled() && CONFIG.sso_acceptall_invites() {
         return send_org_enrolled(address, org_name, invited_by_email).await;
     }
 

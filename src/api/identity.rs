@@ -353,16 +353,15 @@ async fn authenticated_response(
         }
     }
 
-    if CONFIG.sso_acceptall_invites() {
+    if CONFIG.sso_enabled() && CONFIG.sso_acceptall_invites() {
         for user_org in UserOrganization::find_invited_by_user(&user.uuid, conn).await.iter_mut() {
             user_org.status = UserOrgStatus::Accepted as i32;
             user_org.save(conn).await?;
 
             if CONFIG.mail_enabled() {
                 if let Some(org) = Organization::find_by_uuid(&user_org.org_uuid, conn).await {
-                    match &user_org.invited_by_email {
-                        Some(invited_by) => mail::send_invite_accepted(&user.email, invited_by, &org.name).await?,
-                        None => mail::send_invite_confirmed(&user.email, &org.name).await?,
+                    if let Some(invited_by) = &user_org.invited_by_email {
+                        mail::send_invite_accepted(&user.email, invited_by, &org.name).await?;
                     }
                 }
             }
