@@ -1,6 +1,6 @@
 # SSO using OpenId Connect
 
-To use an external source of authentication your SSO will need to support OpendID Connect :
+To use an external source of authentication your SSO will need to support OpenID Connect :
 
  - And OpenID Connect Discovery endpoint should be available
  - Client authentication will be done using Id and Secret.
@@ -15,6 +15,8 @@ The following configurations are available
  - `SSO_ENABLED` : Activate the SSO
  - `SSO_ONLY` : disable email+Master password authentication
  - `SSO_AUTHORITY` : the OpendID Connect Discovery endpoint of your SSO
+ 	- Should not include the `/.well-known/openid-configuration` part and no trailing `/`
+ 	- $SSO_AUTHORITY/.well-known/openid-configuration should return the a json document: https://openid.net/specs/openid-connect-discovery-1_0.html#ProviderConfigurationResponse
  - `SSO_CLIENT_ID` : Client Id
  - `SSO_CLIENT_SECRET` : Client Secret
  - `SSO_KEY_FILEPATH` : Optional public key to validate the JWT token (without it signature check will not be done).
@@ -31,3 +33,22 @@ Create an application in your Gitlab Settings with
 - `scopes`: `openid`, `profile`, `email`
 
 Then configure your server with `SSO_AUTHORITY=https://gitlab.com`, `SSO_CLIENT_ID` and `SSO_CLIENT_SECRET`.
+
+## Configuration hints using Google
+
+Google [Documentation](https://developers.google.com/identity/openid-connect/openid-connect).
+Then configure your server with `SSO_AUTHORITY=https://accounts.google.com`, `SSO_CLIENT_ID` and `SSO_CLIENT_SECRET`.
+
+## Microsoft Entra ID
+
+Only the v2 endpooint is compliant with the OpenID spec.
+The endpoint should be in the format: https://login.microsoftonline.com/${tenantguid}/v2.0
+
+You should able to find it on https://entra.microsoft.com/ following `Identity | Applications | App registrations | Endpoints`.
+
+Then configure your server with `SSO_AUTHORITY=https://login.microsoftonline.com/${tenantguid}/v2.0`, `SSO_CLIENT_ID` and `SSO_CLIENT_SECRET`.
+
+Other endoints are not OpenID compliant, cf:
+
+ - https://github.com/MicrosoftDocs/azure-docs/issues/38427
+ - https://github.com/ramosbugs/openidconnect-rs/issues/122
