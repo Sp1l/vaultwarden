@@ -10,7 +10,7 @@ use std::{
 use num_traits::ToPrimitive;
 use rocket::{
     fairing::{Fairing, Info, Kind},
-    http::{ContentType, Cookie, CookieJar, Header, HeaderMap, Method, SameSite, Status},
+    http::{ContentType, Header, HeaderMap, Method, Status},
     request::FromParam,
     response::{self, Responder},
     Data, Orbit, Request, Response, Rocket,
@@ -831,30 +831,4 @@ pub fn parse_experimental_client_feature_flags(experimental_client_feature_flags
         experimental_client_feature_flags.to_lowercase().split(',').map(|f| (f.trim().to_owned(), true)).collect();
 
     feature_states
-}
-
-pub struct CookieManager<'a> {
-    jar: &'a CookieJar<'a>,
-}
-
-impl<'a> CookieManager<'a> {
-    pub fn new(jar: &'a CookieJar<'a>) -> Self {
-        Self {
-            jar,
-        }
-    }
-
-    pub fn set_cookie(&self, name: String, value: String) {
-        let cookie = Cookie::build((name, value)).same_site(SameSite::Lax);
-
-        self.jar.add(cookie)
-    }
-
-    pub fn get_cookie(&self, name: String) -> Option<String> {
-        self.jar.get(&name).map(|c| c.value().to_string())
-    }
-
-    pub fn delete_cookie(&self, name: String) {
-        self.jar.remove(Cookie::from(name));
-    }
 }

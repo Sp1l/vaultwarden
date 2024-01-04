@@ -3,7 +3,7 @@ use num_traits::FromPrimitive;
 use rocket::serde::json::Json;
 use rocket::{
     form::{Form, FromForm},
-    http::CookieJar,
+    http::{Cookie, CookieJar},
     Route,
 };
 use serde_json::Value;
@@ -22,12 +22,12 @@ use crate::{
     db::{models::*, DbConn},
     error::MapResult,
     mail, sso, util,
-    util::{CookieManager, CustomRedirect},
+    util::CustomRedirect,
     CONFIG,
 };
 
 pub fn routes() -> Vec<Route> {
-    routes![login, prelogin, identity_register, prevalidate, authorize, oidcsignin]
+    routes![login, prelogin, identity_register, prevalidate, authorize, oidcsignin, oidcsignin_error]
 }
 
 #[post("/connect/token", data = "<data>")]
@@ -804,83 +804,82 @@ fn prevalidate() -> JsonResult {
     })))
 }
 
-#[get("/connect/oidc-signin?<code>")]
-fn oidcsignin(code: String, jar: &CookieJar<'_>) -> ApiResult<CustomRedirect> {
-    let cookiemanager = CookieManager::new(jar);
-    let redirect_uri = cookiemanager
-        .get_cookie("redirect_uri".to_string())
+#[get("/connect/oidc-signin?<code>&<state>", rank = 1)]
+fn oidcsignin(code: String, state: String, jar: &CookieJar<'_>) -> ApiResult<CustomRedirect> {
+    let redirect_uri = jar
+        .get(&sso::COOKIE_NAME_REDIRECT.to_string())
+        .map(|c| c.value().to_string())
         .unwrap_or(format!("{}/sso-connector.html", CONFIG.domain()));
 
-    let orig_state = match cookiemanager.get_cookie("state".to_string()) {
-        None => err!("No state in cookie"),
-        Some(state) => state,
-    };
-
-    cookiemanager.delete_cookie("redirect_uri".to_string());
-    cookiemanager.delete_cookie("state".to_string());
-
     let redirect = CustomRedirect {
-        url: format!("{redirect_uri}?code={code}&state={orig_state}"),
+        url: format!("{}?code={code}&state={state}", redirect_uri),
         headers: vec![],
     };
 
     Ok(redirect)
 }
 
-#[derive(FromForm)]
+// No good way to display the error
+// Bitwarden client appear to only care for code and state
+// cf: https://github.com/bitwarden/clients/blob/8e46ef1ae5be8b62b0d3d0b9d1b1c62088a04638/libs/angular/src/auth/components/sso.component.ts#L68C11-L68C23)
+#[get("/connect/oidc-signin?<error>&<error_description>", rank = 2)]
+fn oidcsignin_error(error: String, error_description: Option<String>) -> ApiResult<CustomRedirect> {
+    if CONFIG.sso_auth_failure_silent() {
+        warn!("SSO login failed with {error} and {:?}", error_description);
+        Ok(CustomRedirect {
+            url: format!("/#?error={error}"),
+            headers: vec![],
+        })
+    } else {
+        err!(format!("SSO login failed with {error} and {:?}", error_description));
+    }
+}
+
+#[derive(Debug, Clone, Default, FromForm)]
 struct AuthorizeData {
     #[allow(unused)]
-    #[field(name = uncased("client_id"))]
-    #[field(name = uncased("clientid"))]
     client_id: Option<String>,
     #[field(name = uncased("redirect_uri"))]
     #[field(name = uncased("redirecturi"))]
-    redirect_uri: Option<String>,
+    redirect_uri: String,
     #[allow(unused)]
-    #[field(name = uncased("response_type"))]
-    #[field(name = uncased("responsetype"))]
     response_type: Option<String>,
     #[allow(unused)]
-    #[field(name = uncased("scope"))]
     scope: Option<String>,
-    #[field(name = uncased("state"))]
-    state: Option<String>,
+    state: String,
     #[allow(unused)]
-    #[field(name = uncased("code_challenge"))]
     code_challenge: Option<String>,
     #[allow(unused)]
-    #[field(name = uncased("code_challenge_method"))]
     code_challenge_method: Option<String>,
     #[allow(unused)]
-    #[field(name = uncased("response_mode"))]
     response_mode: Option<String>,
     #[allow(unused)]
-    #[field(name = uncased("domain_hint"))]
     domain_hint: Option<String>,
     #[allow(unused)]
     #[field(name = uncased("ssoToken"))]
     sso_token: Option<String>,
 }
 
+// The `redirect_uri` will change depending of the client (web, android, ios ..)
 #[get("/connect/authorize?<data..>")]
 async fn authorize(data: AuthorizeData, jar: &CookieJar<'_>, conn: DbConn) -> ApiResult<CustomRedirect> {
-    let cookiemanager = CookieManager::new(jar);
-    let auth_url = sso::authorize_url(conn).await?;
+    let AuthorizeData {
+        redirect_uri,
+        state,
+        ..
+    } = data;
 
-    let redirect_uri = match data.redirect_uri {
-        None => err!("No redirect_uri in data"),
-        Some(uri) => uri,
-    };
-    let state = match data.state {
-        None => err!("No state in data"),
-        Some(state) => state,
-    };
+    let cookie = Cookie::build((sso::COOKIE_NAME_REDIRECT.to_string(), redirect_uri))
+        .max_age(rocket::time::Duration::minutes(5))
+        .same_site(rocket::http::SameSite::Lax)
+        .http_only(true);
 
-    cookiemanager.set_cookie("redirect_uri".to_string(), redirect_uri);
-    cookiemanager.set_cookie("state".to_string(), state);
+    jar.add(cookie);
+
+    let auth_url = sso::authorize_url(conn, state).await?;
 
     Ok(CustomRedirect {
-        url: format!("{}", auth_url),
+        url: auth_url.to_string(),
         headers: vec![],
     })
 }
