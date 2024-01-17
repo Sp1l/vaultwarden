@@ -3,7 +3,7 @@ use num_traits::FromPrimitive;
 use rocket::serde::json::Json;
 use rocket::{
     form::{Form, FromForm},
-    http::{Cookie, CookieJar},
+    http::{Cookie, CookieJar, Status},
     Route,
 };
 use serde_json::Value;
@@ -18,7 +18,8 @@ use crate::{
         push::register_push_device,
         ApiResult, EmptyResult, JsonResult, JsonUpcase,
     },
-    auth::{encode_jwt, generate_organization_api_key_login_claims, generate_ssotoken_claims, ClientHeaders, ClientIp},
+    auth,
+    auth::{AuthMethodScope, ClientHeaders, ClientIp},
     db::{models::*, DbConn},
     error::MapResult,
     mail, sso, util,
@@ -72,7 +73,7 @@ async fn login(data: Form<ConnectData>, client_header: ClientHeaders, mut conn: 
             _check_is_some(&data.device_name, "device_name cannot be blank")?;
             _check_is_some(&data.device_type, "device_type cannot be blank")?;
 
-            _authorization_login(data, &mut user_uuid, &mut conn, &client_header.ip).await
+            _sso_login(data, &mut user_uuid, &mut conn, &client_header.ip).await
         }
         t => err!("Invalid type", t),
     };
@@ -107,70 +108,56 @@ async fn login(data: Form<ConnectData>, client_header: ClientHeaders, mut conn: 
     login_result
 }
 
+// Return Status::Unauthorized to trigger logout
 async fn _refresh_login(data: ConnectData, conn: &mut DbConn) -> JsonResult {
     // Extract token
-    let token = data.refresh_token.unwrap();
+    let refresh_token = match data.refresh_token {
+        Some(token) => token,
+        None => err_code!("Missing refresh_token", Status::Unauthorized.code),
+    };
 
-    // Get device by refresh token
-    let mut device = Device::find_by_refresh_token(&token, conn).await.map_res("Invalid refresh token")?;
-
-    let scope = "api offline_access";
-    let scope_vec = vec!["api".into(), "offline_access".into()];
-
-    // Common
-    let user = User::find_by_uuid(&device.user_uuid, conn).await.unwrap();
     // ---
     // Disabled this variable, it was used to generate the JWT
     // Because this might get used in the future, and is add by the Bitwarden Server, lets keep it, but then commented out
     // See: https://github.com/dani-garcia/vaultwarden/issues/4156
     // ---
     // let orgs = UserOrganization::find_confirmed_by_user(&user.uuid, conn).await;
-    let (access_token, expires_in) = device.refresh_tokens(&user, scope_vec);
-    device.save(conn).await?;
+    match auth::refresh_tokens(&refresh_token, conn).await {
+        Err(err) => err_code!(err.to_string(), Status::Unauthorized.code),
+        Ok((user, auth_tokens)) => {
+            let result = json!({
+                "refresh_token": auth_tokens.refresh_token(),
+                "access_token": auth_tokens.access_token(),
+                "expires_in": auth_tokens.expires_in(),
+                "token_type": "Bearer",
+                "Key": user.akey,
+                "PrivateKey": user.private_key,
 
-    let result = json!({
-        "access_token": access_token,
-        "expires_in": expires_in,
-        "token_type": "Bearer",
-        "refresh_token": device.refresh_token,
-        "Key": user.akey,
-        "PrivateKey": user.private_key,
+                "Kdf": user.client_kdf_type,
+                "KdfIterations": user.client_kdf_iter,
+                "KdfMemory": user.client_kdf_memory,
+                "KdfParallelism": user.client_kdf_parallelism,
+                "ResetMasterPassword": false, // TODO: according to official server seems something like: user.password_hash.is_empty(), but would need testing
+                "scope": auth_tokens.scope(),
+                "unofficialServer": true,
+            });
 
-        "Kdf": user.client_kdf_type,
-        "KdfIterations": user.client_kdf_iter,
-        "KdfMemory": user.client_kdf_memory,
-        "KdfParallelism": user.client_kdf_parallelism,
-        "ResetMasterPassword": false, // TODO: according to official server seems something like: user.password_hash.is_empty(), but would need testing
-        "scope": scope,
-        "unofficialServer": true,
-    });
-
-    Ok(Json(result))
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct TokenPayload {
-    exp: i64,
-    email: Option<String>,
-    nonce: String,
+            Ok(Json(result))
+        }
+    }
 }
 
 // After exchanging the code we need to check first if 2FA is needed before continuing
-async fn _authorization_login(
-    data: ConnectData,
-    user_uuid: &mut Option<String>,
-    conn: &mut DbConn,
-    ip: &ClientIp,
-) -> JsonResult {
-    let scope = match data.scope.as_ref() {
-        None => err!("Got no scope in OIDC data"),
-        Some(scope) => scope,
-    };
-    if scope != "api offline_access" {
-        err!("Scope not supported")
+async fn _sso_login(data: ConnectData, user_uuid: &mut Option<String>, conn: &mut DbConn, ip: &ClientIp) -> JsonResult {
+    if !CONFIG.sso_enabled() {
+        err!("SSO sign-in is disabled");
     }
 
-    let scope_vec = vec!["api".into(), "offline_access".into()];
+    let _ = auth::AuthMethod::Sso.check_scope(data.scope.as_ref())?;
+
+    // Ratelimit the login
+    crate::ratelimit::check_limit_login(&ip.ip)?;
+
     let code = match data.code.as_ref() {
         None => err!("Got no code in OIDC data"),
         Some(code) => code,
@@ -178,17 +165,19 @@ async fn _authorization_login(
 
     let user_infos = sso::exchange_code(code).await?;
 
+    // Will trigger 2FA flow if needed
     let user_data = match User::find_by_mail(user_infos.email.as_str(), conn).await {
         None => None,
         Some(user) => {
-            let (mut device, new_device) = get_device(&data, conn, &user).await;
+            let (mut device, new_device) = get_device(&data, conn, &user).await?;
             let twofactor_token = twofactor_auth(&user, &data, &mut device, ip, conn).await?;
 
             Some((user, device, new_device, twofactor_token))
         }
     };
 
-    let refresh_token = sso::redeem(code, conn).await?;
+    // We passed 2FA get full user informations
+    let auth_user = sso::redeem(code, conn).await?;
 
     let now = Utc::now().naive_utc();
     let (user, mut device, new_device, twofactor_token) = match user_data {
@@ -198,16 +187,18 @@ async fn _authorization_login(
             user.verified_at = Some(now);
             user.save(conn).await?;
 
-            let (device, new_device) = get_device(&data, conn, &user).await;
+            let (device, new_device) = get_device(&data, conn, &user).await?;
 
             (user, device, new_device, None)
         }
     };
 
-    device.refresh_token = refresh_token; // will be saved in authenticated_response
-    *user_uuid = Some(user.uuid.clone()); // Set the user_uuid to be passed back used for event logging.
+    // Set the user_uuid here to be passed back used for event logging.
+    *user_uuid = Some(user.uuid.clone());
 
-    authenticated_response(scope, scope_vec, &user, &mut device, new_device, twofactor_token, &now, conn, ip).await
+    let auth_tokens = sso::create_auth_tokens(&device, &user, auth_user.refresh_token, &auth_user.access_token)?;
+
+    authenticated_response(&user, &mut device, new_device, auth_tokens, twofactor_token, &now, conn, ip).await
 }
 
 async fn _password_login(
@@ -216,19 +207,15 @@ async fn _password_login(
     conn: &mut DbConn,
     ip: &ClientIp,
 ) -> JsonResult {
-    // Validate scope
-    let scope = data.scope.as_ref().unwrap();
-    if scope != "api offline_access" {
-        err!("Scope not supported")
-    }
-    let scope_vec = vec!["api".into(), "offline_access".into()];
-
-    // Ratelimit the login
-    crate::ratelimit::check_limit_login(&ip.ip)?;
-
     if CONFIG.sso_enabled() && CONFIG.sso_only() {
         err!("SSO sign-in is required");
     }
+
+    // Validate scope
+    let _ = auth::AuthMethod::Password.check_scope(data.scope.as_ref())?;
+
+    // Ratelimit the login
+    crate::ratelimit::check_limit_login(&ip.ip)?;
 
     // Get the user
     let username = data.username.as_ref().unwrap().trim();
@@ -319,20 +306,21 @@ async fn _password_login(
         )
     }
 
-    let (mut device, new_device) = get_device(&data, conn, &user).await;
+    let (mut device, new_device) = get_device(&data, conn, &user).await?;
 
     let twofactor_token = twofactor_auth(&user, &data, &mut device, ip, conn).await?;
 
-    authenticated_response(scope, scope_vec, &user, &mut device, new_device, twofactor_token, &now, conn, ip).await
+    let auth_tokens = auth::AuthTokens::new(&device, &user, auth::AuthMethod::Password);
+
+    authenticated_response(&user, &mut device, new_device, auth_tokens, twofactor_token, &now, conn, ip).await
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn authenticated_response(
-    scope: &String,
-    scope_vec: Vec<String>,
     user: &User,
     device: &mut Device,
     new_device: bool,
+    auth_tokens: auth::AuthTokens,
     twofactor_token: Option<String>,
     now: &NaiveDateTime,
     conn: &mut DbConn,
@@ -371,21 +359,11 @@ async fn authenticated_response(
     // register push device
     register_push_device(device, conn).await?;
 
-    // Common
-    // ---
-    // Disabled this variable, it was used to generate the JWT
-    // Because this might get used in the future, and is add by the Bitwarden Server, lets keep it, but then commented out
-    // See: https://github.com/dani-garcia/vaultwarden/issues/4156
-    // ---
-    // let orgs = UserOrganization::find_confirmed_by_user(&user.uuid, conn).await;
-    let (access_token, expires_in) = device.refresh_tokens(user, scope_vec);
-    device.save(conn).await?;
-
     let mut result = json!({
-        "access_token": access_token,
-        "expires_in": expires_in,
+        "access_token": auth_tokens.access_token(),
+        "expires_in": auth_tokens.expires_in(),
         "token_type": "Bearer",
-        "refresh_token": device.refresh_token,
+        "refresh_token": auth_tokens.refresh_token(),
         "Key": user.akey,
         "PrivateKey": user.private_key,
         "Kdf": user.client_kdf_type,
@@ -393,7 +371,7 @@ async fn authenticated_response(
         "KdfMemory": user.client_kdf_memory,
         "KdfParallelism": user.client_kdf_parallelism,
         "ResetMasterPassword": false,// TODO: Same as above
-        "scope": scope,
+        "scope": auth_tokens.scope(),
         "unofficialServer": true,
         "UserDecryptionOptions": {
             "HasMasterPassword": !user.password_hash.is_empty(),
@@ -415,13 +393,15 @@ async fn _api_key_login(
     conn: &mut DbConn,
     ip: &ClientIp,
 ) -> JsonResult {
+    use auth::AuthMethod::{OrgApiKey, UserApiKey};
+
     // Ratelimit the login
     crate::ratelimit::check_limit_login(&ip.ip)?;
 
     // Validate scope
-    match data.scope.as_ref().unwrap().as_ref() {
-        "api" => _user_api_key_login(data, user_uuid, conn, ip).await,
-        "api.organization" => _organization_api_key_login(data, conn, ip).await,
+    match data.scope.as_ref() {
+        Some(scope) if scope == &UserApiKey.scope() => _user_api_key_login(data, user_uuid, conn, ip).await,
+        Some(scope) if scope == &OrgApiKey.scope() => _organization_api_key_login(data, conn, ip).await,
         _ => err!("Scope not supported"),
     }
 }
@@ -469,7 +449,7 @@ async fn _user_api_key_login(
         )
     }
 
-    let (mut device, new_device) = get_device(&data, conn, &user).await;
+    let (device, new_device) = get_device(&data, conn, &user).await?;
 
     if CONFIG.mail_enabled() && new_device {
         let now = Utc::now().naive_utc();
@@ -487,24 +467,21 @@ async fn _user_api_key_login(
         }
     }
 
-    // Common
-    let scope_vec = vec!["api".into()];
     // ---
     // Disabled this variable, it was used to generate the JWT
     // Because this might get used in the future, and is add by the Bitwarden Server, lets keep it, but then commented out
     // See: https://github.com/dani-garcia/vaultwarden/issues/4156
     // ---
     // let orgs = UserOrganization::find_confirmed_by_user(&user.uuid, conn).await;
-    let (access_token, expires_in) = device.refresh_tokens(&user, scope_vec);
-    device.save(conn).await?;
+    let access_claims = auth::LoginJwtClaims::default(&device, &user, &auth::AuthMethod::UserApiKey);
 
     info!("User {} logged in successfully via API key. IP: {}", user.email, ip.ip);
 
     // Note: No refresh_token is returned. The CLI just repeats the
     // client_credentials login flow when the existing token expires.
     let result = json!({
-        "access_token": access_token,
-        "expires_in": expires_in,
+        "access_token": access_claims.token(),
+        "expires_in": access_claims.expires_in(),
         "token_type": "Bearer",
         "Key": user.akey,
         "PrivateKey": user.private_key,
@@ -514,7 +491,7 @@ async fn _user_api_key_login(
         "KdfMemory": user.client_kdf_memory,
         "KdfParallelism": user.client_kdf_parallelism,
         "ResetMasterPassword": false, // TODO: Same as above
-        "scope": "api",
+        "scope": auth::AuthMethod::UserApiKey.scope(),
         "unofficialServer": true,
     });
 
@@ -539,20 +516,20 @@ async fn _organization_api_key_login(data: ConnectData, conn: &mut DbConn, ip: &
         err!("Incorrect client_secret", format!("IP: {}. Organization: {}.", ip.ip, org_api_key.org_uuid))
     }
 
-    let claim = generate_organization_api_key_login_claims(org_api_key.uuid, org_api_key.org_uuid);
-    let access_token = crate::auth::encode_jwt(&claim);
+    let claim = auth::generate_organization_api_key_login_claims(org_api_key.uuid, org_api_key.org_uuid);
+    let access_token = auth::encode_jwt(&claim);
 
     Ok(Json(json!({
         "access_token": access_token,
         "expires_in": 3600,
         "token_type": "Bearer",
-        "scope": "api.organization",
+        "scope": auth::AuthMethod::OrgApiKey.scope(),
         "unofficialServer": true,
     })))
 }
 
 /// Retrieves an existing device or creates a new device from ConnectData and the User
-async fn get_device(data: &ConnectData, conn: &mut DbConn, user: &User) -> (Device, bool) {
+async fn get_device(data: &ConnectData, conn: &mut DbConn, user: &User) -> ApiResult<(Device, bool)> {
     // On iOS, device_type sends "iOS", on others it sends a number
     // When unknown or unable to parse, return 14, which is 'Unknown Browser'
     let device_type = util::try_parse_string(data.device_type.as_ref()).unwrap_or(14);
@@ -564,12 +541,14 @@ async fn get_device(data: &ConnectData, conn: &mut DbConn, user: &User) -> (Devi
     let device = match Device::find_by_uuid_and_user(&device_id, &user.uuid, conn).await {
         Some(device) => device,
         None => {
+            let mut device = Device::new(device_id, user.uuid.clone(), device_name, device_type);
+            device.save(conn).await?;
             new_device = true;
-            Device::new(device_id, user.uuid.clone(), device_name, device_type)
+            device
         }
     };
 
-    (device, new_device)
+    Ok((device, new_device))
 }
 
 async fn twofactor_auth(
@@ -638,12 +617,14 @@ async fn twofactor_auth(
 
     TwoFactorIncomplete::mark_complete(&user.uuid, &device.uuid, conn).await?;
 
-    if !CONFIG.disable_2fa_remember() && remember == 1 {
-        Ok(Some(device.refresh_twofactor_remember()))
+    let two_factor = if !CONFIG.disable_2fa_remember() && remember == 1 {
+        Some(device.refresh_twofactor_remember())
     } else {
         device.delete_twofactor_remember();
-        Ok(None)
-    }
+        None
+    };
+    device.save(conn).await?;
+    Ok(two_factor)
 }
 
 fn _selected_data(tf: Option<TwoFactor>) -> ApiResult<String> {
@@ -797,8 +778,8 @@ fn _check_is_some<T>(value: &Option<T>, msg: &str) -> EmptyResult {
 
 #[get("/account/prevalidate")]
 fn prevalidate() -> JsonResult {
-    let claims = generate_ssotoken_claims();
-    let sso_token = encode_jwt(&claims);
+    let claims = auth::generate_ssotoken_claims();
+    let sso_token = auth::encode_jwt(&claims);
     Ok(Json(json!({
         "token": sso_token,
     })))
