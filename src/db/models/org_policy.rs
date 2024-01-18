@@ -75,16 +75,12 @@ impl OrgPolicy {
         self.atype == policy_type as i32
     }
 
-    pub fn data_json(data: &str) -> Value {
-        serde_json::from_str(data).unwrap_or(Value::Null)
-    }
-
     pub fn to_json(&self) -> Value {
         json!({
             "Id": self.uuid,
             "OrganizationId": self.org_uuid,
             "Type": self.atype,
-            "Data": Self::data_json(&self.data),
+            "Data": serde_json::from_str(&self.data).unwrap_or(Value::Null),
             "Enabled": self.enabled,
             "Object": "policy",
         })

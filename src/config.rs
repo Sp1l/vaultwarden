@@ -1030,12 +1030,9 @@ fn internal_sso_redirect_url(sso_callback_path: &String) -> Result<openidconnect
 }
 
 fn check_master_password_policy(sso_master_password_policy: &Option<String>) -> Result<(), Error> {
-    let policy = sso_master_password_policy.as_ref().map(|mpp| crate::db::models::OrgPolicy::data_json(mpp));
-    if policy == Some(serde_json::Value::Null) {
-        err!(format!(
-            "Invalid sso_master_password_policy ({:?}), Ensure that it's correctly escaped with ''",
-            sso_master_password_policy
-        ))
+    let policy = sso_master_password_policy.as_ref().map(|mpp| serde_json::from_str::<serde_json::Value>(mpp));
+    if let Some(Err(error)) = policy {
+        err!(format!("Invalid sso_master_password_policy ({error}), Ensure that it's correctly escaped with ''"))
     }
     Ok(())
 }

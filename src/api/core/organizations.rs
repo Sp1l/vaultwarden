@@ -307,9 +307,12 @@ async fn get_user_collections(headers: Headers, mut conn: DbConn) -> Json<Value>
 }
 
 // Called during the SSO enrollment
+// The `_identifier` should be the harcoded value returned by `get_org_domain_sso_details`
+// The returned `Id` will then be passed to `get_policy_master_password` which will mainly ignore it
 #[get("/organizations/<_identifier>/auto-enroll-status")]
 fn get_auto_enroll_status(_identifier: &str) -> JsonResult {
     Ok(Json(json!({
+        "Id": "_",
         "ResetPasswordEnabled": false, // Not implemented
     })))
 }
@@ -1692,7 +1695,7 @@ async fn list_policies_invited_user(org_id: &str, userId: &str, mut conn: DbConn
         let policies = OrgPolicy::find_by_org(org_id, &mut conn).await;
         policies.iter().map(OrgPolicy::to_json).collect()
     } else {
-        vec![]
+        Vec::with_capacity(0)
     };
 
     Ok(Json(json!({

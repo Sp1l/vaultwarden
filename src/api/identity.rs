@@ -19,7 +19,7 @@ use crate::{
         ApiResult, EmptyResult, JsonResult, JsonUpcase,
     },
     auth,
-    auth::{AuthMethodScope, ClientHeaders, ClientIp},
+    auth::{AuthMethod, AuthMethodScope, ClientHeaders, ClientIp},
     db::{models::*, DbConn},
     error::MapResult,
     mail, sso, util,
@@ -124,7 +124,10 @@ async fn _refresh_login(data: ConnectData, conn: &mut DbConn) -> JsonResult {
     // let orgs = UserOrganization::find_confirmed_by_user(&user.uuid, conn).await;
     match auth::refresh_tokens(&refresh_token, conn).await {
         Err(err) => err_code!(err.to_string(), Status::Unauthorized.code),
-        Ok((user, auth_tokens)) => {
+        Ok((mut device, user, auth_tokens)) => {
+            // Save to update `device.updated_at` to track usage
+            device.save(conn).await?;
+
             let result = json!({
                 "refresh_token": auth_tokens.refresh_token(),
                 "access_token": auth_tokens.access_token(),
@@ -153,7 +156,7 @@ async fn _sso_login(data: ConnectData, user_uuid: &mut Option<String>, conn: &mu
         err!("SSO sign-in is disabled");
     }
 
-    let _ = auth::AuthMethod::Sso.check_scope(data.scope.as_ref())?;
+    AuthMethod::Sso.check_scope(data.scope.as_ref())?;
 
     // Ratelimit the login
     crate::ratelimit::check_limit_login(&ip.ip)?;
@@ -212,7 +215,7 @@ async fn _password_login(
     }
 
     // Validate scope
-    let _ = auth::AuthMethod::Password.check_scope(data.scope.as_ref())?;
+    AuthMethod::Password.check_scope(data.scope.as_ref())?;
 
     // Ratelimit the login
     crate::ratelimit::check_limit_login(&ip.ip)?;
@@ -310,7 +313,7 @@ async fn _password_login(
 
     let twofactor_token = twofactor_auth(&user, &data, &mut device, ip, conn).await?;
 
-    let auth_tokens = auth::AuthTokens::new(&device, &user, auth::AuthMethod::Password);
+    let auth_tokens = auth::AuthTokens::new(&device, &user, AuthMethod::Password);
 
     authenticated_response(&user, &mut device, new_device, auth_tokens, twofactor_token, &now, conn, ip).await
 }
@@ -359,6 +362,9 @@ async fn authenticated_response(
     // register push device
     register_push_device(device, conn).await?;
 
+    // Save to update `device.updated_at` to track usage
+    device.save(conn).await?;
+
     let mut result = json!({
         "access_token": auth_tokens.access_token(),
         "expires_in": auth_tokens.expires_in(),
@@ -393,15 +399,13 @@ async fn _api_key_login(
     conn: &mut DbConn,
     ip: &ClientIp,
 ) -> JsonResult {
-    use auth::AuthMethod::{OrgApiKey, UserApiKey};
-
     // Ratelimit the login
     crate::ratelimit::check_limit_login(&ip.ip)?;
 
     // Validate scope
     match data.scope.as_ref() {
-        Some(scope) if scope == &UserApiKey.scope() => _user_api_key_login(data, user_uuid, conn, ip).await,
-        Some(scope) if scope == &OrgApiKey.scope() => _organization_api_key_login(data, conn, ip).await,
+        Some(scope) if scope == &AuthMethod::UserApiKey.scope() => _user_api_key_login(data, user_uuid, conn, ip).await,
+        Some(scope) if scope == &AuthMethod::OrgApiKey.scope() => _organization_api_key_login(data, conn, ip).await,
         _ => err!("Scope not supported"),
     }
 }
@@ -449,7 +453,7 @@ async fn _user_api_key_login(
         )
     }
 
-    let (device, new_device) = get_device(&data, conn, &user).await?;
+    let (mut device, new_device) = get_device(&data, conn, &user).await?;
 
     if CONFIG.mail_enabled() && new_device {
         let now = Utc::now().naive_utc();
@@ -474,6 +478,9 @@ async fn _user_api_key_login(
     // ---
     // let orgs = UserOrganization::find_confirmed_by_user(&user.uuid, conn).await;
     let access_claims = auth::LoginJwtClaims::default(&device, &user, &auth::AuthMethod::UserApiKey);
+
+    // Save to update `device.updated_at` to track usage
+    device.save(conn).await?;
 
     info!("User {} logged in successfully via API key. IP: {}", user.email, ip.ip);
 
@@ -541,8 +548,7 @@ async fn get_device(data: &ConnectData, conn: &mut DbConn, user: &User) -> ApiRe
     let device = match Device::find_by_uuid_and_user(&device_id, &user.uuid, conn).await {
         Some(device) => device,
         None => {
-            let mut device = Device::new(device_id, user.uuid.clone(), device_name, device_type);
-            device.save(conn).await?;
+            let device = Device::new(device_id, user.uuid.clone(), device_name, device_type);
             new_device = true;
             device
         }
@@ -623,7 +629,6 @@ async fn twofactor_auth(
         device.delete_twofactor_remember();
         None
     };
-    device.save(conn).await?;
     Ok(two_factor)
 }
 
@@ -794,7 +799,7 @@ fn oidcsignin(code: String, state: String, jar: &CookieJar<'_>) -> ApiResult<Cus
 
     let redirect = CustomRedirect {
         url: format!("{}?code={code}&state={state}", redirect_uri),
-        headers: vec![],
+        headers: Vec::with_capacity(0),
     };
 
     Ok(redirect)
@@ -809,7 +814,7 @@ fn oidcsignin_error(error: String, error_description: Option<String>) -> ApiResu
         warn!("SSO login failed with {error} and {:?}", error_description);
         Ok(CustomRedirect {
             url: format!("/#?error={error}"),
-            headers: vec![],
+            headers: Vec::with_capacity(0),
         })
     } else {
         err!(format!("SSO login failed with {error} and {:?}", error_description));
@@ -861,6 +866,6 @@ async fn authorize(data: AuthorizeData, jar: &CookieJar<'_>, conn: DbConn) -> Ap
 
     Ok(CustomRedirect {
         url: auth_url.to_string(),
-        headers: vec![],
+        headers: Vec::with_capacity(0),
     })
 }

@@ -1048,7 +1048,7 @@ impl AuthTokens {
     }
 }
 
-pub async fn refresh_tokens(refresh_token: &str, conn: &mut DbConn) -> ApiResult<(User, AuthTokens)> {
+pub async fn refresh_tokens(refresh_token: &str, conn: &mut DbConn) -> ApiResult<(Device, User, AuthTokens)> {
     let time_now = Utc::now().naive_utc();
 
     let refresh_claims = match decode_refresh(refresh_token) {
@@ -1079,5 +1079,5 @@ pub async fn refresh_tokens(refresh_token: &str, conn: &mut DbConn) -> ApiResult
         _ => err!("Invalid auth method cannot refresh token"),
     };
 
-    Ok((user, auth_tokens))
+    Ok((device, user, auth_tokens))
 }
