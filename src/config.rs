@@ -625,6 +625,8 @@ make_config! {
         sso_auth_failure_silent:        bool,   true,   def,    false;
         /// Authority Server
         sso_authority:                  String, true,   def,    String::new();
+        /// Scopes required for authorize
+        sso_scopes:                     String, false,   def,   "email profile".to_string();
         /// CallBack Path
         sso_callback_path:              String, false,  gen,    |c| generate_sso_callback_path(&c.domain);
         /// Allow workaround so SSO logins accept all invites
@@ -1322,6 +1324,10 @@ impl Config {
 
     pub fn sso_redirect_url(&self) -> Result<openidconnect::RedirectUrl, Error> {
         internal_sso_redirect_url(&self.sso_callback_path())
+    }
+
+    pub fn sso_scopes_vec(&self) -> Vec<String> {
+        self.sso_scopes().split_whitespace().map(str::to_string).collect()
     }
 }
 

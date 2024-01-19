@@ -17,6 +17,7 @@ The following configurations are available
  - `SSO_AUTHORITY` : the OpendID Connect Discovery endpoint of your SSO
  	- Should not include the `/.well-known/openid-configuration` part and no trailing `/`
  	- $SSO_AUTHORITY/.well-known/openid-configuration should return the a json document: https://openid.net/specs/openid-connect-discovery-1_0.html#ProviderConfigurationResponse
+ - `SSO_SCOPES` : Optional, allow to override scopes if needed (default `"email profile"`)
  - `SSO_CLIENT_ID` : Client Id
  - `SSO_CLIENT_SECRET` : Client Secret
  - `SSO_AUTH_FAILURE_SILENT`: Silently redirect to the home instead of displaying a JSON error.
@@ -47,9 +48,17 @@ The endpoint should be in the format: https://login.microsoftonline.com/${tenant
 
 You should able to find it on https://entra.microsoft.com/ following `Identity | Applications | App registrations | Endpoints`.
 
-Then configure your server with `SSO_AUTHORITY=https://login.microsoftonline.com/${tenantguid}/v2.0`, `SSO_CLIENT_ID` and `SSO_CLIENT_SECRET`.
+Additionnaly you'll need to override the default scopes to add `offline_access` otherwise no refresh_token is returned ([cf](https://github.com/MicrosoftDocs/azure-docs/issues/17134)).
+
+Configuration should look like this:
+
+	- `SSO_AUTHORITY=https://login.microsoftonline.com/${tenantguid}/v2.0`,
+	- `SSO_SCOPES="email profile offline_access"`
+	- `SSO_CLIENT_ID=...`
+	- `SSO_CLIENT_SECRET=...`.
 
 Other endoints are not OpenID compliant, cf:
 
  - https://github.com/MicrosoftDocs/azure-docs/issues/38427
  - https://github.com/ramosbugs/openidconnect-rs/issues/122
+

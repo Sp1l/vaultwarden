@@ -16,7 +16,7 @@ use openidconnect::{
 use crate::{
     api::ApiResult,
     auth,
-    auth::AuthMethodScope,
+    auth::{AuthMethodScope, DEFAULT_REFRESH_VALIDITY},
     db::{
         models::{Device, SsoNonce, User},
         DbConn,
@@ -69,6 +69,8 @@ async fn cached_client() -> ApiResult<CoreClient> {
 
 // The `nonce` allow to protect against replay attacks
 pub async fn authorize_url(mut conn: DbConn, state: String) -> ApiResult<Url> {
+    let scopes = CONFIG.sso_scopes_vec().into_iter().map(Scope::new);
+
     let (auth_url, _csrf_state, nonce) = cached_client()
         .await?
         .authorize_url(
@@ -76,8 +78,7 @@ pub async fn authorize_url(mut conn: DbConn, state: String) -> ApiResult<Url> {
             || CsrfToken::new(state),
             Nonce::new_random,
         )
-        .add_scope(Scope::new("email".to_string()))
-        .add_scope(Scope::new("profile".to_string()))
+        .add_scopes(scopes)
         .url();
 
     let sso_nonce = SsoNonce::new(nonce.secret().to_string());
@@ -109,7 +110,7 @@ impl BasicTokenPayload {
 #[derive(Clone, Debug)]
 pub struct AuthenticatedUser {
     pub nonce: String,
-    pub refresh_token: String,
+    pub refresh_token: Option<String>,
     pub access_token: String,
     pub email: String,
     pub user_name: Option<String>,
@@ -169,7 +170,7 @@ impl Decoding {
             Ok(payload) => Ok(payload.claims),
             Err(err) => {
                 self.log_decode_debug(token_name, token);
-                err!(format!("Could not decode {token_name}: {err}"))
+                err_silent!(format!("Could not decode {token_name}: {err}"))
             }
         }
     }
@@ -268,10 +269,10 @@ pub async fn exchange_code(code: &String) -> ApiResult<UserInformation> {
 
             let user_name = user_info.preferred_username().map(|un| un.to_string());
 
-            let refresh_token = match token_response.refresh_token() {
-                Some(token) => token.secret().to_string(),
-                None => err!("Missing refresh_token"),
-            };
+            let refresh_token = token_response.refresh_token().map(|t| t.secret().to_string());
+            if refresh_token.is_none() && CONFIG.sso_scopes_vec().contains(&"offline_access".to_string()) {
+                error!("Scope offline_access is present but response contain no refresh_token");
+            }
 
             let authenticated_user = AuthenticatedUser {
                 nonce: id_token.nonce,
@@ -313,23 +314,33 @@ pub async fn redeem(code: &String, conn: &mut DbConn) -> ApiResult<Authenticated
 pub fn create_auth_tokens(
     device: &Device,
     user: &User,
-    refresh_token: String,
+    refresh_token: Option<String>,
     access_token: &str,
 ) -> ApiResult<auth::AuthTokens> {
-    let refresh_payload = SSO_JWT_VALIDATION.decode_basic_token("refresh_token", &refresh_token)?;
+    let refresh_claims = refresh_token.map(|rt| {
+        let (nbf, exp) = match SSO_JWT_VALIDATION.decode_basic_token("refresh_token", &rt) {
+            Err(_) => {
+                let time_now = Utc::now().naive_utc();
+                (time_now.timestamp(), (time_now + *DEFAULT_REFRESH_VALIDITY).timestamp())
+            }
+            Ok(refresh_payload) => {
+                debug!("Refresh_payload: {:?}", refresh_payload);
+                (refresh_payload.nbf(), refresh_payload.exp)
+            }
+        };
+
+        auth::RefreshJwtClaims {
+            nbf,
+            exp,
+            iss: auth::JWT_LOGIN_ISSUER.to_string(),
+            sub: auth::AuthMethod::Sso,
+            device_token: device.refresh_token.clone(),
+            refresh_token: Some(rt),
+        }
+    });
+
     let access_payload = SSO_JWT_VALIDATION.decode_basic_token("access_token", access_token)?;
-
-    debug!("Refresh_payload: {:?}", refresh_payload);
     debug!("Access_payload: {:?}", access_payload);
-
-    let refresh_claims = auth::RefreshJwtClaims {
-        nbf: refresh_payload.nbf(),
-        exp: refresh_payload.exp,
-        iss: auth::JWT_LOGIN_ISSUER.to_string(),
-        sub: auth::AuthMethod::Sso,
-        device_token: device.refresh_token.clone(),
-        refresh_token: Some(refresh_token),
-    };
 
     let access_claims = auth::LoginJwtClaims::new(
         device,
@@ -364,7 +375,7 @@ pub async fn exchange_refresh_token(
         let rolled_refresh_token =
             token_response.refresh_token().map(|token| token.secret().to_string()).unwrap_or(refresh_token.to_string());
 
-        create_auth_tokens(device, user, rolled_refresh_token, token_response.access_token().secret())
+        create_auth_tokens(device, user, Some(rolled_refresh_token), token_response.access_token().secret())
     } else {
         err!("Impossible to retrieve new access token, refresh_token is missing")
     }
